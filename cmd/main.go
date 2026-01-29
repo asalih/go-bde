@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/binalyze/go-bde"
+	"github.com/asalih/go-bde"
 )
 
 func main() {
