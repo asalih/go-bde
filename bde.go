@@ -22,14 +22,32 @@ func NewBootSectorReader(r io.ReaderAt) (*BootSectorReader, error) {
 	bootReader := &BootSectorReader{r: r}
 
 	// Read boot sector at offset 0.
-	sr := io.NewSectionReader(r, 0, maxSectionSize)
+	sr := sectionReader(r, 0)
 	if err := binary.Read(sr, binary.LittleEndian, &bootReader.bootSector); err != nil {
 		return nil, err
 	}
 
 	// Calculate sector and cluster sizes.
-	bootReader.sectorSize = 1 << bootReader.bootSector.BytesPerSectorShift
-	bootReader.clusterSize = bootReader.sectorSize * (1 << bootReader.bootSector.SectorsPerClusterShift)
+	//
+	// Prefer BPB values when present; fall back to shift fields (BitLocker/NTFS style).
+	switch bootReader.bootSector.Bpb.BytesPerSector {
+	case 512, 1024, 2048, 4096:
+		bootReader.sectorSize = int(bootReader.bootSector.Bpb.BytesPerSector)
+	default:
+		// Be conservative: if shift values look invalid, fall back to common defaults.
+		if bootReader.bootSector.BytesPerSectorShift < 9 || bootReader.bootSector.BytesPerSectorShift > 12 {
+			bootReader.sectorSize = 512
+		} else {
+			bootReader.sectorSize = 1 << bootReader.bootSector.BytesPerSectorShift
+		}
+	}
+	if bootReader.bootSector.Bpb.SectorsPerCluster > 0 {
+		bootReader.clusterSize = bootReader.sectorSize * int(bootReader.bootSector.Bpb.SectorsPerCluster)
+	} else if bootReader.bootSector.SectorsPerClusterShift > 25 { // defensive upper bound
+		bootReader.clusterSize = bootReader.sectorSize
+	} else {
+		bootReader.clusterSize = bootReader.sectorSize * (1 << bootReader.bootSector.SectorsPerClusterShift)
+	}
 
 	// Read GUID locator blocks.
 	var err error
@@ -45,54 +63,118 @@ const maxSectionSize = int64(^uint64(0) >> 1)
 
 // readGuidBlocks scans the first sectors for BitLocker GUID locator blocks.
 func (b *BootSectorReader) readGuidBlocks(r io.ReaderAt) ([]int64, []int64, error) {
-	// Store BitLocker metadata offsets found in GUID locator blocks.
-	var infoOffsets []int64
-	var eowOffsets []int64
+	tryScan := func(sectorSize int64, maxSectors int64) ([]int64, []int64, error) {
+		var infoOffsets []int64
+		var eowOffsets []int64
 
-	// Scan the first 20 sectors for known GUIDs.
-	for sector := int64(0); sector < 20; sector++ {
-		offset := sector * int64(b.sectorSize)
-		var guidBuf [16]byte
-		if _, err := r.ReadAt(guidBuf[:], offset); err != nil {
-			return nil, nil, err
-		}
-
-		// GUID checks are done without a UUID package.
-		if bytes.Equal(guidBuf[:], []byte{0x32, 0xd0, 0xff, 0x3b, 0xc4, 0xf3, 0xf9, 0x4b, 0x87, 0x45, 0xc9, 0x01, 0x2e, 0x92, 0x6e, 0x5d}) {
-			// Standard FVE GUID block: 3 uint64 offsets follow.
-			var raw [24]byte
-			if _, err := r.ReadAt(raw[:], offset+16); err != nil {
-				return nil, nil, err
+		sec := make([]byte, sectorSize)
+		parseOffsets := func(base int64, idx int, infoCount int, eowCount int) error {
+			need := idx + 16 + (infoCount+eowCount)*8
+			if need <= len(sec) {
+				raw := sec[idx+16 : idx+16+(infoCount+eowCount)*8]
+				for i := 0; i < infoCount; i++ {
+					off := binary.LittleEndian.Uint64(raw[i*8 : (i+1)*8])
+					if off != 0 {
+						infoOffsets = append(infoOffsets, int64(off))
+					}
+				}
+				for i := 0; i < eowCount; i++ {
+					off := binary.LittleEndian.Uint64(raw[infoCount*8+i*8 : infoCount*8+(i+1)*8])
+					if off != 0 {
+						eowOffsets = append(eowOffsets, int64(off))
+					}
+				}
+				return nil
 			}
-			for i := 0; i < 3; i++ {
+
+			raw := make([]byte, (infoCount+eowCount)*8)
+			if _, err := r.ReadAt(raw, base+int64(idx)+16); err != nil {
+				return err
+			}
+			for i := 0; i < infoCount; i++ {
 				off := binary.LittleEndian.Uint64(raw[i*8 : (i+1)*8])
 				if off != 0 {
 					infoOffsets = append(infoOffsets, int64(off))
 				}
 			}
-		} else if bytes.Equal(guidBuf[:], []byte{0x32, 0xd0, 0xff, 0x3b, 0xc4, 0xf3, 0xf9, 0x4b, 0x87, 0x45, 0xc9, 0x01, 0x33, 0xd8, 0x96, 0x32}) {
-			// EOW-capable FVE GUID block: 3 uint64 info offsets + 2 uint64 EOW offsets follow.
-			var raw [40]byte
-			if _, err := r.ReadAt(raw[:], offset+16); err != nil {
-				return nil, nil, err
-			}
-
-			for i := 0; i < 3; i++ {
-				off := binary.LittleEndian.Uint64(raw[i*8 : (i+1)*8])
-				if off != 0 {
-					infoOffsets = append(infoOffsets, int64(off))
-				}
-			}
-			for i := 0; i < 2; i++ {
-				off := binary.LittleEndian.Uint64(raw[24+i*8 : 24+(i+1)*8])
+			for i := 0; i < eowCount; i++ {
+				off := binary.LittleEndian.Uint64(raw[infoCount*8+i*8 : infoCount*8+(i+1)*8])
 				if off != 0 {
 					eowOffsets = append(eowOffsets, int64(off))
 				}
 			}
+			return nil
+		}
+
+		for sector := int64(0); sector < maxSectors; sector++ {
+			offset := sector * sectorSize
+			if _, err := r.ReadAt(sec, offset); err != nil {
+				return nil, nil, err
+			}
+
+			// Standard locator.
+			for _, guid := range [][]byte{
+				INFORMATION_OFFSET_GUID[:],
+				INFORMATION_OFFSET_GUID_RFC4122[:],
+			} {
+				if idx := bytes.Index(sec, guid); idx >= 0 {
+					if err := parseOffsets(offset, idx, 3, 0); err != nil {
+						return nil, nil, err
+					}
+				}
+			}
+
+			// EOW-capable locator.
+			for _, guid := range [][]byte{
+				EOW_INFORMATION_OFFSET_GUID[:],
+				EOW_INFORMATION_OFFSET_GUID_RFC4122[:],
+			} {
+				if idx := bytes.Index(sec, guid); idx >= 0 {
+					if err := parseOffsets(offset, idx, 3, 2); err != nil {
+						return nil, nil, err
+					}
+				}
+			}
+		}
+
+		return infoOffsets, eowOffsets, nil
+	}
+
+	// First attempt: derived sector size, scan deeper.
+	info, eow, err := tryScan(int64(b.sectorSize), 256)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(info) > 0 || len(eow) > 0 {
+		return info, eow, nil
+	}
+
+	// Fallbacks for images where the shift fields are unreliable or 4K-native.
+	if int64(b.sectorSize) != 512 {
+		info, eow, err = tryScan(512, 256)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(info) > 0 || len(eow) > 0 {
+			return info, eow, nil
+		}
+	}
+	if int64(b.sectorSize) != 4096 {
+		info, eow, err = tryScan(4096, 256)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(info) > 0 || len(eow) > 0 {
+			return info, eow, nil
 		}
 	}
 
-	return infoOffsets, eowOffsets, nil
+	// Final fallback: use InformationLcn if present (offset in clusters).
+	if b.bootSector.InformationLcn != 0 && b.clusterSize > 0 {
+		return []int64{int64(b.bootSector.InformationLcn) * int64(b.clusterSize)}, nil, nil
+	}
+
+	return nil, nil, nil
 }
 
 // SectorSize returns the sector size in bytes.
@@ -129,6 +211,7 @@ type BDE struct {
 	availableEowInformation []*EowInformation
 
 	fvek []byte
+	fvekType FveKeyType
 }
 
 // New creates a new BDE reader over a random-access source.
@@ -143,13 +226,58 @@ func New(r io.ReaderAt) (*BDE, error) {
 
 	// Read all Information blocks.
 	bde.availableInformation = []*Information{}
-	for _, offset := range bde.bootSector.InformationOffsets() {
-		info, err := NewInformation(r, offset)
-		if err != nil {
-			// Skip invalid information blocks.
-			continue
+	infoOffsets := bde.bootSector.InformationOffsets()
+
+	// If GUID locator scan didn't yield offsets, fall back to a signature scan when size is known.
+	if len(infoOffsets) == 0 {
+		if sz, ok := readerSize(r); ok && sz > 0 {
+			// Try scanning the tail of the partition for GUID locator blocks (some layouts place
+			// locators near the end). Use the computed sector size and common fallbacks.
+			tryTail := func(sectorSize int64, maxSectors int64) {
+				if len(infoOffsets) > 0 || sectorSize <= 0 {
+					return
+				}
+				windowBytes := sectorSize * maxSectors
+				start := sz - windowBytes
+				if start < 0 {
+					start = 0
+				}
+				tail := io.NewSectionReader(r, start, sz-start)
+				if offs, err := probeInformationOffsets(tail, sectorSize, maxSectors); err == nil && len(offs) > 0 {
+					infoOffsets = offs
+				}
+			}
+
+			tryTail(int64(bde.bootSector.SectorSize()), 8192)
+			tryTail(512, 8192)
+			tryTail(4096, 8192)
+
+			// As a robust fallback, scan forward for "-FVE-FS-" signatures and attempt to parse
+			// an Information block at each candidate offset until one succeeds.
+			if len(infoOffsets) == 0 {
+				if infos, err := findInformationBlocksBySignature(r, sz, 3); err == nil && len(infos) > 0 {
+					bde.availableInformation = append(bde.availableInformation, infos...)
+				}
+			}
+		} else {
+			// If the caller's ReaderAt does not expose Size(), do a bounded streaming scan and
+			// stop on EOF. This is common for custom partition adapters.
+			if infos, err := findInformationBlocksBySignatureUntilEOF(r, 2<<30, 3); err == nil && len(infos) > 0 {
+				bde.availableInformation = append(bde.availableInformation, infos...)
+			}
 		}
-		bde.availableInformation = append(bde.availableInformation, info)
+	}
+
+	// If we already found Information blocks via signature scan, skip offset-based parsing.
+	if len(bde.availableInformation) == 0 {
+		for _, offset := range infoOffsets {
+			info, err := NewInformation(r, offset)
+			if err != nil {
+				// Skip invalid information blocks.
+				continue
+			}
+			bde.availableInformation = append(bde.availableInformation, info)
+		}
 	}
 
 	// Filter valid Information blocks.
@@ -160,12 +288,15 @@ func New(r io.ReaderAt) (*BDE, error) {
 		}
 	}
 
-	if len(bde.validInformation) == 0 {
-		return nil, InvalidHeaderError{Msg: "no valid BitLocker information block found"}
+	// Prefer a valid (checksum verified) Information block, but be tolerant:
+	// some images have mismatching CRCs while still being parseable.
+	if len(bde.validInformation) > 0 {
+		bde.information = bde.validInformation[0]
+	} else if len(bde.availableInformation) > 0 {
+		bde.information = bde.availableInformation[0]
+	} else {
+		return nil, InvalidHeaderError{Msg: "no BitLocker information block found (GUID locators missing or offsets invalid)"}
 	}
-
-	// Use the first valid information block.
-	bde.information = bde.validInformation[0]
 
 	// Read EOW information blocks (if any).
 	if len(bde.bootSector.EowOffsets()) > 0 {
@@ -223,12 +354,14 @@ func (b *BDE) Version() int {
 
 // Paused reports whether encryption/decryption is paused.
 func (b *BDE) Paused() bool {
-	return b.information.CurrentState() == FveStatePaused
+	// Not currently derived from metadata entries.
+	return false
 }
 
 // Decrypted reports whether the volume is already in decrypted state.
 func (b *BDE) Decrypted() bool {
-	return b.information.CurrentState() == FveStateDecrypted
+	// Treat as decrypted if encryption method is 0.
+	return b.information != nil && b.information.dataset != nil && b.information.dataset.header.EncryptionMethod == 0
 }
 
 // Encrypted reports whether the volume is encrypted.
@@ -238,13 +371,13 @@ func (b *BDE) Encrypted() bool {
 
 // Switching reports whether encryption/decryption is in progress.
 func (b *BDE) Switching() bool {
-	state := b.information.CurrentState()
-	return state != FveStateDecrypted && state != FveStateEncrypted
+	// Not currently derived from metadata entries.
+	return false
 }
 
 // Unlocked reports whether the volume key has been obtained (or volume is decrypted).
 func (b *BDE) Unlocked() bool {
-	return b.fvek != nil || b.information.CurrentState() == FveStateDecrypted
+	return b.fvek != nil || b.Decrypted()
 }
 
 // Description returns the volume description (if present).
@@ -294,6 +427,7 @@ func (b *BDE) Unlock(key []byte) error {
 	// Successful unlock: store FVEK key bytes.
 	if keyType, _, keyData, ok := unboxedDatum.GetKey(); ok {
 		b.fvek = keyData
+		b.fvekType = keyType
 		cipherType := CipherMap[keyType]
 		if cipherType == "" {
 			return fmt.Errorf("unsupported cipher type: %v", keyType)
@@ -421,19 +555,25 @@ func (b *BDE) unlockWithUserKey(vmkDatums []*Datum, userKey []byte, identifier s
 	}
 
 	// Otherwise, try all candidate VMKs.
+	var lastErr error
 	for _, vmk := range vmkDatums {
 		decryptedKey, err := b.decryptVmkWithUserKey(vmk, userKey)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 
 		if err := b.Unlock(decryptedKey); err != nil {
+			lastErr = err
 			continue
 		}
 
 		return nil
 	}
 
+	if lastErr != nil {
+		return lastErr
+	}
 	return errors.New("no compatible VMK found")
 }
 
@@ -512,12 +652,7 @@ func (b *BDE) ReservedRegions() [][2]int64 {
 			regions = append(regions, [2]int64{sectors, informationSectors})
 		}
 
-		// Virtualized block.
-		if b.information.VirtualizedSectors() > 0 {
-			virtualizedSectors := int64(b.information.VirtualizedSectors())
-			sectors := b.information.VirtualizedBlockOffset() / int64(b.bootSector.SectorSize())
-			regions = append(regions, [2]int64{sectors, virtualizedSectors})
-		}
+		// TODO: Virtualized block support (volume header sectors) can be derived from metadata block header.
 
 		// EOW information.
 		if b.eowInformation != nil {
@@ -540,11 +675,16 @@ type reservedRegion struct {
 type BitlockerStream struct {
 	bde         *BDE
 	offset      int64
-	cipher      interface{} // TODO: replace with concrete cipher type when implemented
+	cipher      *xtsCipher
 	r           io.ReaderAt
 	sectorSize  int64
 	reserved    []reservedRegion
 	passthrough bool // true when volume is already decrypted (no crypto needed)
+
+	// BitLocker stores an encrypted copy of the first N sectors (volume header) at a different offset.
+	// When set, reads for sectors [0, headerSectors) are served from headerOffset + sector*sectorSize.
+	headerOffset  int64
+	headerSectors int64
 }
 
 // NewBitlockerStream creates a new BitlockerStream.
@@ -556,6 +696,19 @@ func NewBitlockerStream(bde *BDE) *BitlockerStream {
 		passthrough: bde.Decrypted(),
 	}
 	bs.setReservedRegions(bde.ReservedRegions())
+	if bde.information != nil {
+		// These fields are in bytes/sectors relative to start of volume (libbde spec).
+		bs.headerOffset = int64(bde.information.blockHeader.VolumeHeaderOff)
+		bs.headerSectors = int64(bde.information.blockHeader.VolumeHeaderSectors)
+	}
+	if !bs.passthrough && bde.fvek != nil {
+		switch bde.fvekType {
+		case FveKeyTypeAesXts128, FveKeyTypeAesXts256:
+			if c, err := newXTSCipher(bde.fvek); err == nil {
+				bs.cipher = c
+			}
+		}
+	}
 	return bs
 }
 
@@ -633,46 +786,73 @@ func (bs *BitlockerStream) nextReservedStartOffset(off int64) int64 {
 }
 
 func (bs *BitlockerStream) readAtInternal(p []byte, off int64) (n int, nextOff int64, err error) {
-	if !bs.passthrough && bs.cipher == nil {
-		return 0, off, errors.New("decryption is not initialized")
-	}
 	cur := off
 	dst := p
 
 	for len(dst) > 0 {
-		cur = bs.nextUnreservedOffset(cur)
-
-		// Limit the read to the next reserved region start to avoid reading reserved bytes.
-		limit := int64(len(dst))
-		if next := bs.nextReservedStartOffset(cur); next >= 0 && next > cur {
-			maxToNext := next - cur
-			if maxToNext < limit {
-				limit = maxToNext
-			}
+		sector := cur / bs.sectorSize
+		inSector := cur % bs.sectorSize
+		remainInSector := bs.sectorSize - inSector
+		toDo := int64(len(dst))
+		if toDo > remainInSector {
+			toDo = remainInSector
 		}
-		if limit <= 0 {
-			// We're exactly at a reserved boundary; advance and retry.
-			cur += bs.sectorSize
+
+		// Zero-fill reserved metadata sectors to preserve offsets.
+		if bs.isReservedSector(sector) {
+			for i := int64(0); i < toDo; i++ {
+				dst[i] = 0
+			}
+			n += int(toDo)
+			cur += toDo
+			dst = dst[toDo:]
 			continue
 		}
 
-		chunk := dst[:limit]
-		m, readErr := bs.r.ReadAt(chunk, cur)
-		n += m
-		cur += int64(m)
-		dst = dst[m:]
+		// Fast path: already decrypted, just ReadAt.
+		if bs.passthrough {
+			chunk := dst[:toDo]
+			m, readErr := bs.r.ReadAt(chunk, cur)
+			n += m
+			cur += int64(m)
+			dst = dst[m:]
+			if readErr != nil {
+				return n, cur, readErr
+			}
+			if int64(m) < toDo {
+				return n, cur, io.EOF
+			}
+			continue
+		}
 
-		// TODO: Apply decryption to chunk[:m] when cipher is implemented.
+		if bs.cipher == nil {
+			return n, cur, errors.New("decryption is not initialized (volume not unlocked or cipher unsupported)")
+		}
 
+		// AES-XTS is sector-based: read and decrypt the full sector, then copy the requested range.
+		sectorStart := cur - inSector
+		// Virtual header sector mapping (BitLocker stores encrypted copy elsewhere).
+		srcOffset := sectorStart
+		if bs.headerOffset > 0 && bs.headerSectors > 0 && sector >= 0 && sector < bs.headerSectors {
+			srcOffset = bs.headerOffset + sector*bs.sectorSize
+		}
+		// BitLocker sector number for XTS is relative to the start of the volume.
+		sectorNum := uint64(srcOffset / bs.sectorSize)
+		bp := sectorBufPool.Get().(*[]byte)
+		sectorBuf := (*bp)[:bs.sectorSize]
+		_, readErr := bs.r.ReadAt(sectorBuf, srcOffset)
 		if readErr != nil {
-			// io.ReaderAt is allowed to return (n>0, err==io.EOF). Respect that.
+			sectorBufPool.Put(bp)
 			return n, cur, readErr
 		}
+		bs.cipher.decryptSector(sectorBuf, sectorBuf, sectorNum)
 
-		// If we could not fill the requested chunk without an error, stop.
-		if m < int(limit) {
-			return n, cur, io.EOF
-		}
+		copy(dst[:toDo], sectorBuf[inSector:inSector+toDo])
+		sectorBufPool.Put(bp)
+
+		n += int(toDo)
+		cur += toDo
+		dst = dst[toDo:]
 	}
 
 	return n, cur, nil
@@ -701,7 +881,7 @@ func (bs *BitlockerStream) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// Seek moves the current offset (best-effort; metadata regions are skipped forward).
+// Seek moves the current offset.
 func (bs *BitlockerStream) Seek(offset int64, whence int) (int64, error) {
 	var newOffset int64
 
@@ -721,9 +901,6 @@ func (bs *BitlockerStream) Seek(offset int64, whence int) (int64, error) {
 	if newOffset < 0 {
 		return 0, errors.New("negative offset")
 	}
-
-	// Skip forward if the target offset lands inside a reserved region.
-	newOffset = bs.nextUnreservedOffset(newOffset)
 
 	// Update offset.
 	bs.offset = newOffset

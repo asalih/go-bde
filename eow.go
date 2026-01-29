@@ -20,7 +20,7 @@ func NewEowInformation(r io.ReaderAt, offset int64) (*EowInformation, error) {
 		offset: offset,
 	}
 
-	sr := io.NewSectionReader(r, offset, maxSectionSize)
+	sr := sectionReader(r, offset)
 
 	// Read signature.
 	headerBuf := make([]byte, 8)

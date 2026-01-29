@@ -35,7 +35,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to parse BitLocker metadata: %v", err)
 	}
+	decryptedVol, err := vol.Open()
+	if err != nil {
+		log.Fatalf("Failed to open BitLocker volume: %v", err)
+	}
 
+	decryptedVol.Read(make([]byte, 1024))
 	fmt.Printf("BitLocker version: %d\n", vol.Version())
 	fmt.Printf("Sector size: %d\n", vol.SectorSize())
 	fmt.Printf("Description: %q\n", vol.Description())

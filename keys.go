@@ -120,6 +120,9 @@ func CheckRecoveryPassword(recoveryPassword string) error {
 		}
 
 		checksum := (digits[0] - digits[1] + digits[2] - digits[3] + digits[4]) % 11
+		if checksum < 0 {
+			checksum += 11
+		}
 		if checksum != digits[5] {
 			return errors.New("invalid recovery password: invalid block checksum")
 		}

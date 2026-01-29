@@ -10,8 +10,13 @@ var (
 	// GUID locator blocks (raw bytes as stored on disk).
 	// Standard: 3bffd032-f3c4-4bf9-8745-c9012e926e5d
 	INFORMATION_OFFSET_GUID = [16]byte{0x32, 0xd0, 0xff, 0x3b, 0xc4, 0xf3, 0xf9, 0x4b, 0x87, 0x45, 0xc9, 0x01, 0x2e, 0x92, 0x6e, 0x5d}
+	// Standard (RFC 4122 byte order): 3bffd032-f3c4-4bf9-8745-c9012e926e5d
+	// Some tools/images store the GUID in this order.
+	INFORMATION_OFFSET_GUID_RFC4122 = [16]byte{0x3b, 0xff, 0xd0, 0x32, 0xf3, 0xc4, 0x4b, 0xf9, 0x87, 0x45, 0xc9, 0x01, 0x2e, 0x92, 0x6e, 0x5d}
 	// EOW-capable: 3bffd032-f3c4-4bf9-8745-c90133d89632
 	EOW_INFORMATION_OFFSET_GUID = [16]byte{0x32, 0xd0, 0xff, 0x3b, 0xc4, 0xf3, 0xf9, 0x4b, 0x87, 0x45, 0xc9, 0x01, 0x33, 0xd8, 0x96, 0x32}
+	// EOW-capable (RFC 4122 byte order): 3bffd032-f3c4-4bf9-8745-c90133d89632
+	EOW_INFORMATION_OFFSET_GUID_RFC4122 = [16]byte{0x3b, 0xff, 0xd0, 0x32, 0xf3, 0xc4, 0x4b, 0xf9, 0x87, 0x45, 0xc9, 0x01, 0x33, 0xd8, 0x96, 0x32}
 )
 
 // BDE states
@@ -153,31 +158,35 @@ type BootSector struct {
 	Unused3                [402]byte
 }
 
-// FveInformation represents the FVE Information structure
-type FveInformation struct {
-	Signature              [8]byte
-	HeaderSize             uint16
-	Version                uint16
-	CurrentState           uint16
-	NextState              uint16
-	StateOffset            uint64
-	StateSize              uint32
-	VirtualizedSectors     uint32
-	InformationOffset      [3]uint64
-	VirtualizedBlockOffset uint64 // Union with Mft2StartLcn
+// FveMetadataBlockHeaderV2 represents the FVE metadata block header version 2 (Windows 7+).
+// See libbde format spec.
+type FveMetadataBlockHeaderV2 struct {
+	Signature [8]byte
+	Size      uint16
+	Version   uint16 // 2
+	Unknown1  uint16
+	Unknown2  uint16
+
+	EncryptedVolumeSize uint64
+	Unknown3            uint32
+	VolumeHeaderSectors uint32
+
+	MetadataOffset1 uint64
+	MetadataOffset2 uint64
+	MetadataOffset3 uint64
+	VolumeHeaderOff uint64
 }
 
-// FveDataset represents the FVE Dataset structure
-type FveDataset struct {
-	Size           uint32
-	Version        uint32
-	StartOffset    uint32
-	EndOffset      uint32
-	Identification [16]byte
-	NonceCounter   uint32
-	FvekType       uint16
-	Unknown        uint16
-	CreationTime   uint64
+// FveMetadataHeader represents the FVE metadata header (version 1) inside a metadata block.
+type FveMetadataHeader struct {
+	MetadataSize     uint32
+	Version          uint32
+	HeaderSize       uint32
+	MetadataSizeCopy uint32
+	VolumeIdentifier [16]byte
+	NextNonceCounter uint32
+	EncryptionMethod uint32
+	CreationTime     uint64
 }
 
 // FveDatum represents the base FVE Datum structure
@@ -221,22 +230,18 @@ type FveAesCcmEncryptedDatum struct {
 	// Data follows
 }
 
-// FveVmkInfo represents the VMK info datum structure
+// FveVmkInfo represents the VMK info entry value (type 0x0008).
 type FveVmkInfo struct {
 	GuidIdentifier [16]byte
 	DateTime       uint64
-	Priority       uint16
-	Unknown1       uint16
-	Unknown2       uint16
-	Unknown3       uint16
+	Unknown        uint16
+	ProtectorType  uint16 // see FveKeyProtector
 }
 
-// FveExternalInfo represents the external info datum structure
+// FveExternalInfo represents the external info entry value (type 0x0009).
 type FveExternalInfo struct {
 	GuidIdentifier [16]byte
 	DateTime       uint64
-	Unknown1       uint16
-	Unknown2       uint16
 }
 
 // FveVirtualizationInfo represents the virtualization info datum structure
