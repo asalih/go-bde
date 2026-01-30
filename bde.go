@@ -210,7 +210,7 @@ type BDE struct {
 	validEowInformation     []*EowInformation
 	availableEowInformation []*EowInformation
 
-	fvek []byte
+	fvek     []byte
 	fvekType FveKeyType
 }
 
@@ -626,7 +626,12 @@ func (b *BDE) Open() (*BitlockerStream, error) {
 		return nil, errors.New("volume is not unlocked")
 	}
 
-	return NewBitlockerStream(b), nil
+	bs := NewBitlockerStream(b)
+	// If the volume is encrypted, we must have a cipher to read data.
+	if !bs.passthrough && bs.cipher == nil {
+		return nil, fmt.Errorf("unsupported or uninitialized cipher for encryption method: 0x%04x", uint16(b.fvekType))
+	}
+	return bs, nil
 }
 
 // ReservedRegions returns the reserved metadata regions as (startSector, numSectors).
@@ -671,11 +676,15 @@ type reservedRegion struct {
 	endSector   int64 // exclusive
 }
 
+type sectorCipher interface {
+	decryptSector(dst, src []byte, sectorNum uint64)
+}
+
 // BitlockerStream is a decrypted BitLocker volume stream.
 type BitlockerStream struct {
 	bde         *BDE
 	offset      int64
-	cipher      *xtsCipher
+	cipher      sectorCipher
 	r           io.ReaderAt
 	sectorSize  int64
 	reserved    []reservedRegion
@@ -705,6 +714,10 @@ func NewBitlockerStream(bde *BDE) *BitlockerStream {
 		switch bde.fvekType {
 		case FveKeyTypeAesXts128, FveKeyTypeAesXts256:
 			if c, err := newXTSCipher(bde.fvek); err == nil {
+				bs.cipher = c
+			}
+		case FveKeyTypeAes128, FveKeyTypeAes256:
+			if c, err := newCBCCipher(bde.fvek, int(bs.sectorSize)); err == nil {
 				bs.cipher = c
 			}
 		}
@@ -836,7 +849,8 @@ func (bs *BitlockerStream) readAtInternal(p []byte, off int64) (n int, nextOff i
 		if bs.headerOffset > 0 && bs.headerSectors > 0 && sector >= 0 && sector < bs.headerSectors {
 			srcOffset = bs.headerOffset + sector*bs.sectorSize
 		}
-		// BitLocker sector number for XTS is relative to the start of the volume.
+		// BitLocker sector crypto is sector-based. The "sector number" is derived from the
+		// ciphertext location (srcOffset / sectorSize).
 		sectorNum := uint64(srcOffset / bs.sectorSize)
 		bp := sectorBufPool.Get().(*[]byte)
 		sectorBuf := (*bp)[:bs.sectorSize]

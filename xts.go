@@ -51,26 +51,26 @@ func (c *xtsCipher) decryptSector(dst, src []byte, sectorNum uint64) {
 		panic("xts: invalid sector length")
 	}
 
-	tweak := make([]byte, 16)
+	var tweak [16]byte
 	// BitLocker uses the data unit number (sector index) as tweak input.
 	// Use little-endian uint64 in the first 8 bytes (common for disk encryption).
 	binary.LittleEndian.PutUint64(tweak[:8], sectorNum)
 
-	c.tweakKey.Encrypt(tweak, tweak)
+	c.tweakKey.Encrypt(tweak[:], tweak[:])
 
-	tmp := make([]byte, 16)
+	var tmp [16]byte
 	for off := 0; off < len(src); off += 16 {
 		// PP = C xor tweak
 		for i := 0; i < 16; i++ {
 			tmp[i] = src[off+i] ^ tweak[i]
 		}
 		// P' = D_k1(PP)
-		c.dataKey.Decrypt(tmp, tmp)
+		c.dataKey.Decrypt(tmp[:], tmp[:])
 		// P = P' xor tweak
 		for i := 0; i < 16; i++ {
 			dst[off+i] = tmp[i] ^ tweak[i]
 		}
-		gfMulX(tweak)
+		gfMulX(tweak[:])
 	}
 }
 
@@ -88,4 +88,3 @@ func gfMulX(tweak []byte) {
 		tweak[0] ^= 0x87
 	}
 }
-
