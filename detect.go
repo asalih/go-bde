@@ -138,27 +138,16 @@ func probeInformationOffsets(r io.ReaderAt, sectorSize int64, maxSectors int64) 
 			return nil, err
 		}
 
-		// GUID locator blocks can appear at a non-zero offset within the sector and in
-		// different GUID byte orders depending on the source.
-		for _, guid := range [][]byte{
-			INFORMATION_OFFSET_GUID[:],
-			INFORMATION_OFFSET_GUID_RFC4122[:],
-		} {
-			if idx := bytes.Index(sec, guid); idx >= 0 {
-				if err := parseOffsets(base, idx, 3, 0); err != nil {
-					return nil, err
-				}
+		// GUID locator blocks can appear at a non-zero offset within the sector.
+		// Check for EOW-capable locator first (includes both info and EOW offsets).
+		if idx := bytes.Index(sec, EOW_INFORMATION_OFFSET_GUID[:]); idx >= 0 {
+			// EOW: 3 info offsets + 2 EOW offsets (ignored here).
+			if err := parseOffsets(base, idx, 3, 2); err != nil {
+				return nil, err
 			}
-		}
-		for _, guid := range [][]byte{
-			EOW_INFORMATION_OFFSET_GUID[:],
-			EOW_INFORMATION_OFFSET_GUID_RFC4122[:],
-		} {
-			if idx := bytes.Index(sec, guid); idx >= 0 {
-				// EOW: 3 info offsets + 2 EOW offsets (ignored here).
-				if err := parseOffsets(base, idx, 3, 2); err != nil {
-					return nil, err
-				}
+		} else if idx := bytes.Index(sec, INFORMATION_OFFSET_GUID[:]); idx >= 0 {
+			if err := parseOffsets(base, idx, 3, 0); err != nil {
+				return nil, err
 			}
 		}
 	}

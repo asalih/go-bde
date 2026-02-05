@@ -64,7 +64,7 @@ func TestUnlockWithRecoveryPassword_Image(t *testing.T) {
 			continue
 		}
 
-		vol, err := New(sr)
+		vol, err := New(sr, 0)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}

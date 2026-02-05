@@ -125,8 +125,8 @@ func TestDiskImagePartitions_FindAndParseBitLocker(t *testing.T) {
 		}
 		foundBitLocker = true
 
-		// Try parsing with the library.
-		b, err := New(sr)
+		// Try parsing with the library using GUID locators and boot sector offsets.
+		b, err := New(sr, sizeBytes)
 		if err != nil {
 			// Extra debug: parse boot sector fields and locator scan results.
 			var bs BootSector
@@ -183,37 +183,14 @@ func TestDiskImagePartitions_FindAndParseBitLocker(t *testing.T) {
 					}
 				}
 			}
-			if br, err2 := NewBootSectorReader(sr); err2 == nil {
+			if bsd, err2 := parseBootSector(sr); err2 == nil {
 				t.Logf("partition %s: computed sectorSize=%d clusterSize=%d infoOffsets=%v eowOffsets=%v",
-					p.label(), br.SectorSize(), br.ClusterSize(), br.InformationOffsets(), br.EowOffsets())
+					p.label(), bsd.sectorSize, bsd.clusterSize, bsd.informationOffsets, bsd.eowOffsets)
 			}
 
-			// Search for known GUID locator patterns in the front/back windows.
+			// Log basic debug info
 			if sz, ok := readerSize(sr); ok && sz > 0 {
 				t.Logf("partition %s: startBytes=%d sizeBytes=%d", p.label(), startBytes, sizeBytes)
-				sigOffs, _ := findSignatureOffsets(sr, sz, BITLOCKER_SIGNATURE)
-				if len(sigOffs) > 0 {
-					t.Logf("partition %s: found BITLOCKER_SIGNATURE at offsets (showing up to 10): %v", p.label(), sigOffs[:minInt(10, len(sigOffs))])
-				} else {
-					t.Logf("partition %s: did not find BITLOCKER_SIGNATURE in front/back scan windows", p.label())
-				}
-
-				for _, pat := range []struct {
-					name string
-					b    []byte
-				}{
-					{"INFO_GUID_LE", INFORMATION_OFFSET_GUID[:]},
-					{"INFO_GUID_RFC", INFORMATION_OFFSET_GUID_RFC4122[:]},
-					{"EOW_GUID_LE", EOW_INFORMATION_OFFSET_GUID[:]},
-					{"EOW_GUID_RFC", EOW_INFORMATION_OFFSET_GUID_RFC4122[:]},
-				} {
-					offs, _ := findSignatureOffsets(sr, sz, pat.b)
-					if len(offs) > 0 {
-						t.Logf("partition %s: found %s at offsets (showing up to 5): %v", p.label(), pat.name, offs[:minInt(5, len(offs))])
-					} else {
-						t.Logf("partition %s: did not find %s in front/back scan windows", p.label(), pat.name)
-					}
-				}
 
 				// Sample a few bytes near the end of the partition for quick visibility.
 				for _, d := range []int64{4096, 65536, 1 << 20, 8 << 20} {
@@ -273,10 +250,8 @@ func TestDiskImagePartitions_FindAndParseBitLocker(t *testing.T) {
 						name string
 						b    []byte
 					}{
-						{"INFO_GUID_LE", INFORMATION_OFFSET_GUID[:]},
-						{"INFO_GUID_RFC", INFORMATION_OFFSET_GUID_RFC4122[:]},
-						{"EOW_GUID_LE", EOW_INFORMATION_OFFSET_GUID[:]},
-						{"EOW_GUID_RFC", EOW_INFORMATION_OFFSET_GUID_RFC4122[:]},
+						{"INFO_GUID", INFORMATION_OFFSET_GUID[:]},
+						{"EOW_GUID", EOW_INFORMATION_OFFSET_GUID[:]},
 					} {
 						if off, ok, _ := findFirstOccurrence(sr, sz, pat.b, 2<<30); ok { // scan up to 2 GiB
 							t.Logf("partition %s: deep-scan found %s at offset %d", p.label(), pat.name, off)

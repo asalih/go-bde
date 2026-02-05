@@ -24,7 +24,7 @@ _ = err
 
 ```go
 f, _ := os.Open("bitlocker_volume.bin")
-vol, _ := bde.New(f) // requires io.ReaderAt
+vol, _ := bde.New(f, 0) // requires io.ReaderAt
 fmt.Println(vol.Version(), vol.SectorSize())
 ```
 
@@ -32,7 +32,7 @@ fmt.Println(vol.Version(), vol.SectorSize())
 
 ```go
 f, _ := os.Open("bitlocker_volume.bin") // io.ReaderAt
-vol, _ := bde.New(f)
+vol, _ := bde.New(f, 0)
 
 // Recovery password: "111111-222222-...-888888"
 _ = vol.UnlockWithRecoveryPassword("111111-222222-333333-444444-555555-666666-777777-888888", "")

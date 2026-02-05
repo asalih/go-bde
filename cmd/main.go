@@ -31,7 +31,7 @@ func main() {
 	fmt.Printf("Last modified: %v\n", fileInfo.ModTime())
 
 	// Parse BitLocker metadata.
-	vol, err := bde.New(file)
+	vol, err := bde.New(file, 0)
 	if err != nil {
 		log.Fatalf("Failed to parse BitLocker metadata: %v", err)
 	}

@@ -25,19 +25,20 @@ func (r *readerAtOnly) ReadAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func TestNew_WorksWithoutSizeMethod_UsingSignatureScan(t *testing.T) {
+func TestNew_WorksWithoutSizeMethod_UsingGuidLocator(t *testing.T) {
 	// Build a small synthetic "partition" that:
 	// - has BitLocker OEM marker in the boot sector
+	// - has a GUID locator block pointing to the Information offset
 	// - has a valid Information block + dataset at a later offset
 	const (
-		totalSize     = 2 << 20 // 2 MiB
-		infoOffset    = 1 << 20 // 1 MiB
-		datasetSize   = 512
+		totalSize   = 2 << 20 // 2 MiB
+		infoOffset  = 1 << 20 // 1 MiB
+		datasetSize = 512
 	)
 
 	buf := make([]byte, totalSize)
 
-	// Boot sector.
+	// Boot sector with GUID locator.
 	var bs BootSector
 	copy(bs.Jump[:], []byte{0xEB, 0x58, 0x90})
 	copy(bs.Oem[:], BITLOCKER_SIGNATURE)
@@ -49,6 +50,17 @@ func TestNew_WorksWithoutSizeMethod_UsingSignatureScan(t *testing.T) {
 			t.Fatalf("write boot: %v", err)
 		}
 		copy(buf[:boot.Len()], boot.Bytes())
+	}
+
+	// Add GUID locator block in sector 0 (after boot sector data).
+	// The GUID locator contains the GUID followed by 3 information offsets.
+	{
+		locatorOffset := 160 // Place after essential boot sector fields
+		copy(buf[locatorOffset:locatorOffset+16], INFORMATION_OFFSET_GUID[:])
+		// Write 3 information offsets (first one points to our info block)
+		binary.LittleEndian.PutUint64(buf[locatorOffset+16:locatorOffset+24], uint64(infoOffset))
+		binary.LittleEndian.PutUint64(buf[locatorOffset+24:locatorOffset+32], 0) // unused
+		binary.LittleEndian.PutUint64(buf[locatorOffset+32:locatorOffset+40], 0) // unused
 	}
 
 	// Metadata block header + metadata header at infoOffset.
@@ -80,9 +92,9 @@ func TestNew_WorksWithoutSizeMethod_UsingSignatureScan(t *testing.T) {
 	}
 
 	r := &readerAtOnly{b: buf}
-	vol, err := New(r)
+	vol, err := New(r, 0)
 	if err != nil {
-		t.Fatalf("expected New() to succeed without Size(); got err=%v", err)
+		t.Fatalf("expected New() to succeed with GUID locator; got err=%v", err)
 	}
 	if vol.Version() != 1 {
 		t.Fatalf("expected metadata header version=1, got %d", vol.Version())

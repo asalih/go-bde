@@ -113,7 +113,7 @@ func testDetectionAndValidation(t *testing.T, r io.ReaderAt) {
 	}
 
 	// Create BDE instance
-	bde, err := New(r)
+	bde, err := New(r, 0)
 	if err != nil {
 		t.Fatalf("Failed to create BDE instance: %v", err)
 	}
@@ -150,14 +150,14 @@ func testDetectionAndValidation(t *testing.T, r io.ReaderAt) {
 func testUnlockingAndDecryption(t *testing.T, r io.ReaderAt, password string) {
 	t.Log("Testing unlocking and decryption...")
 
-	bde, err := New(r)
+	bde, err := New(r, 0)
 	if err != nil {
 		t.Fatalf("Failed to create BDE instance: %v", err)
 	}
 
 	// Test invalid password first
 	t.Run("InvalidPassword", func(t *testing.T) {
-		bdeCopy, _ := New(r)
+		bdeCopy, _ := New(r, 0)
 		err := bdeCopy.UnlockWithRecoveryPassword("000000-000000-000000-000000-000000-000000-000000-000000", "")
 		if err == nil {
 			t.Error("Expected error with invalid password, got nil")
@@ -214,7 +214,7 @@ func testUnlockingAndDecryption(t *testing.T, r io.ReaderAt, password string) {
 func testNTFSIntegration(t *testing.T, r io.ReaderAt, password string) {
 	t.Log("Testing NTFS integration...")
 
-	bde, err := New(r)
+	bde, err := New(r, 0)
 	if err != nil {
 		t.Fatalf("Failed to create BDE instance: %v", err)
 	}
@@ -288,7 +288,7 @@ func testNTFSIntegration(t *testing.T, r io.ReaderAt, password string) {
 func testDataIntegrity(t *testing.T, r io.ReaderAt, password string) {
 	t.Log("Testing data integrity...")
 
-	bde, err := New(r)
+	bde, err := New(r, 0)
 	if err != nil {
 		t.Fatalf("Failed to create BDE instance: %v", err)
 	}
@@ -405,7 +405,7 @@ func testPerformanceMetrics(t *testing.T, r io.ReaderAt, password string) {
 		var totalDuration time.Duration
 
 		for i := 0; i < iterations; i++ {
-			bde, _ := New(r)
+			bde, _ := New(r, 0)
 			start := time.Now()
 			_ = bde.UnlockWithRecoveryPassword(password, "")
 			totalDuration += time.Since(start)
@@ -417,7 +417,7 @@ func testPerformanceMetrics(t *testing.T, r io.ReaderAt, password string) {
 
 	// Benchmark read throughput
 	t.Run("ReadThroughput", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 		stream, _ := bde.Open()
 		defer stream.Close()
@@ -441,7 +441,7 @@ func testPerformanceMetrics(t *testing.T, r io.ReaderAt, password string) {
 
 	// Benchmark sequential reads
 	t.Run("SequentialReadPerformance", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 		stream, _ := bde.Open()
 		defer stream.Close()
@@ -470,7 +470,7 @@ func testPerformanceMetrics(t *testing.T, r io.ReaderAt, password string) {
 
 	// Benchmark random reads
 	t.Run("RandomReadPerformance", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 		stream, _ := bde.Open()
 		defer stream.Close()
@@ -499,7 +499,7 @@ func testPerformanceMetrics(t *testing.T, r io.ReaderAt, password string) {
 func testConcurrentAccess(t *testing.T, r io.ReaderAt, password string) {
 	t.Log("Testing concurrent access...")
 
-	bde, err := New(r)
+	bde, err := New(r, 0)
 	if err != nil {
 		t.Fatalf("Failed to create BDE instance: %v", err)
 	}
@@ -565,7 +565,7 @@ func testEdgeCases(t *testing.T, r io.ReaderAt, password string) {
 	t.Log("Testing edge cases...")
 
 	t.Run("DoubleUnlock", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		err1 := bde.UnlockWithRecoveryPassword(password, "")
 		err2 := bde.UnlockWithRecoveryPassword(password, "")
 		if err1 != nil {
@@ -578,7 +578,7 @@ func testEdgeCases(t *testing.T, r io.ReaderAt, password string) {
 	})
 
 	t.Run("ReadBeforeUnlock", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_, err := bde.Open()
 		if err == nil {
 			t.Error("Expected error when opening before unlock")
@@ -588,7 +588,7 @@ func testEdgeCases(t *testing.T, r io.ReaderAt, password string) {
 	})
 
 	t.Run("LargeRead", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 		stream, _ := bde.Open()
 		defer stream.Close()
@@ -605,7 +605,7 @@ func testEdgeCases(t *testing.T, r io.ReaderAt, password string) {
 	})
 
 	t.Run("NegativeOffset", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 		stream, _ := bde.Open()
 		defer stream.Close()
@@ -630,7 +630,7 @@ func testEdgeCases(t *testing.T, r io.ReaderAt, password string) {
 	})
 
 	t.Run("SeekOperations", func(t *testing.T) {
-		bde, _ := New(r)
+		bde, _ := New(r, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 		stream, _ := bde.Open()
 		defer stream.Close()
@@ -676,7 +676,7 @@ func BenchmarkUnlock(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		bde, _ := New(f)
+		bde, _ := New(f, 0)
 		_ = bde.UnlockWithRecoveryPassword(password, "")
 	}
 }
@@ -691,7 +691,7 @@ func BenchmarkRead4K(b *testing.B) {
 	f, _ := os.Open(diskPath)
 	defer f.Close()
 
-	bde, _ := New(f)
+	bde, _ := New(f, 0)
 	_ = bde.UnlockWithRecoveryPassword(password, "")
 	stream, _ := bde.Open()
 	defer stream.Close()
@@ -715,7 +715,7 @@ func BenchmarkRead64K(b *testing.B) {
 	f, _ := os.Open(diskPath)
 	defer f.Close()
 
-	bde, _ := New(f)
+	bde, _ := New(f, 0)
 	_ = bde.UnlockWithRecoveryPassword(password, "")
 	stream, _ := bde.Open()
 	defer stream.Close()
@@ -739,7 +739,7 @@ func BenchmarkRead1M(b *testing.B) {
 	f, _ := os.Open(diskPath)
 	defer f.Close()
 
-	bde, _ := New(f)
+	bde, _ := New(f, 0)
 	_ = bde.UnlockWithRecoveryPassword(password, "")
 	stream, _ := bde.Open()
 	defer stream.Close()
@@ -763,7 +763,7 @@ func BenchmarkSequentialRead(b *testing.B) {
 	f, _ := os.Open(diskPath)
 	defer f.Close()
 
-	bde, _ := New(f)
+	bde, _ := New(f, 0)
 	_ = bde.UnlockWithRecoveryPassword(password, "")
 	stream, _ := bde.Open()
 	defer stream.Close()

@@ -7,16 +7,27 @@ var (
 	// NOTE: This is a byte slice; treat it as read-only.
 	BITLOCKER_SIGNATURE = []byte("-FVE-FS-")
 
-	// GUID locator blocks (raw bytes as stored on disk).
-	// Standard: 3bffd032-f3c4-4bf9-8745-c9012e926e5d
-	INFORMATION_OFFSET_GUID = [16]byte{0x32, 0xd0, 0xff, 0x3b, 0xc4, 0xf3, 0xf9, 0x4b, 0x87, 0x45, 0xc9, 0x01, 0x2e, 0x92, 0x6e, 0x5d}
-	// Standard (RFC 4122 byte order): 3bffd032-f3c4-4bf9-8745-c9012e926e5d
-	// Some tools/images store the GUID in this order.
-	INFORMATION_OFFSET_GUID_RFC4122 = [16]byte{0x3b, 0xff, 0xd0, 0x32, 0xf3, 0xc4, 0x4b, 0xf9, 0x87, 0x45, 0xc9, 0x01, 0x2e, 0x92, 0x6e, 0x5d}
-	// EOW-capable: 3bffd032-f3c4-4bf9-8745-c90133d89632
-	EOW_INFORMATION_OFFSET_GUID = [16]byte{0x32, 0xd0, 0xff, 0x3b, 0xc4, 0xf3, 0xf9, 0x4b, 0x87, 0x45, 0xc9, 0x01, 0x33, 0xd8, 0x96, 0x32}
-	// EOW-capable (RFC 4122 byte order): 3bffd032-f3c4-4bf9-8745-c90133d89632
-	EOW_INFORMATION_OFFSET_GUID_RFC4122 = [16]byte{0x3b, 0xff, 0xd0, 0x32, 0xf3, 0xc4, 0x4b, 0xf9, 0x87, 0x45, 0xc9, 0x01, 0x33, 0xd8, 0x96, 0x32}
+	// GUID locator blocks (raw bytes as stored on disk in little-endian format).
+	//
+	// INFORMATION_OFFSET_GUID: {4967D63B-2E29-4AD8-8399-F6A339E3D001}
+	// Used for standard BitLocker volumes to locate FVE metadata.
+	INFORMATION_OFFSET_GUID = [16]byte{
+		0x3B, 0xD6, 0x67, 0x49, // 4967D63B (little-endian)
+		0x29, 0x2E, // 2E29 (little-endian)
+		0xD8, 0x4A, // 4AD8 (little-endian)
+		0x83, 0x99, // 8399 (big-endian, as per UUID spec)
+		0xF6, 0xA3, 0x39, 0xE3, 0xD0, 0x01, // F6A339E3D001 (big-endian)
+	}
+
+	// EOW_INFORMATION_OFFSET_GUID: {92A84D3B-DD80-4D0E-9E4E-B1E3284EAED8}
+	// Used for BitLocker volumes with Encrypt-On-Write (EOW) support (Windows 8+).
+	EOW_INFORMATION_OFFSET_GUID = [16]byte{
+		0x3B, 0x4D, 0xA8, 0x92, // 92A84D3B (little-endian)
+		0x80, 0xDD, // DD80 (little-endian)
+		0x0E, 0x4D, // 4D0E (little-endian)
+		0x9E, 0x4E, // 9E4E (big-endian)
+		0xB1, 0xE3, 0x28, 0x4E, 0xAE, 0xD8, // B1E3284EAED8 (big-endian)
+	}
 )
 
 // BDE states
